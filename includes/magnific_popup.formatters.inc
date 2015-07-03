@@ -17,6 +17,8 @@ function magnific_popup_field_formatter_info() {
       'field types' => array('file', 'image'),
       'settings'  => array(
         'gallery_style' => key($gallery_options),
+        'thumbnail_image_style' => 'magnific_popup_thumbnail',
+        'popup_image_style' => '',
       ),
     ),
   );
@@ -28,11 +30,11 @@ function magnific_popup_field_formatter_info() {
 function magnific_popup_field_formatter_settings_form($field, $instance, $view_mode, $form, &$form_state) {
   $display = $instance['display'][$view_mode];
   $settings = $display['settings'];
-  
+
   // Gallery Mode is TRUE when this field supports multiple items.
   $gallery_available = $field['cardinality'] !== 1;
   $gallery_options = _magnific_popup_gallery_options();
-  
+
   $element = array();
   $element['gallery_available'] = array(
     '#type' => 'markup',
@@ -40,7 +42,7 @@ function magnific_popup_field_formatter_settings_form($field, $instance, $view_m
     '#suffix' => '</p>',
   );
   $element['gallery_available']['#markup'] = $gallery_available ?
-    t('This field configuration <strong>supports multiple items</strong> and can display itself as a gallery of items!') : 
+    t('This field configuration <strong>supports multiple items</strong> and can display itself as a gallery of items!') :
     t('This field configuration <strong>does not support multiple items</strong> and cannot display itself as a gallery of items.');
   $element['gallery_style'] = array(
     '#type' => 'select',
@@ -49,6 +51,24 @@ function magnific_popup_field_formatter_settings_form($field, $instance, $view_m
     '#disabled' => !$gallery_available,
     '#default_value' => $settings['gallery_style'],
     '#description' => t('Choose how this gallery displays its triggering element(s).'),
+  );
+
+  $image_styles = image_style_options(TRUE, PASS_THROUGH);
+  $element['thumbnail_image_style'] = array(
+    '#title' => t('Thumbnail image style'),
+    '#type' => 'select',
+    '#default_value' => $settings['thumbnail_image_style'],
+    '#empty_option' => t('None (original image)'),
+    '#description' => t('Choose the image style you want to use when displaying the thumbnail images of this field.'),
+    '#options' => $image_styles,
+  );
+  $element['popup_image_style'] = array(
+    '#title' => t('Popup image style'),
+    '#type' => 'select',
+    '#default_value' => $settings['popup_image_style'],
+    '#empty_option' => t('None (original image)'),
+    '#description' => t('Choose the image style you want to use when displaying the images in the popup.'),
+    '#options' => $image_styles,
   );
   return $element;
 }
@@ -59,9 +79,17 @@ function magnific_popup_field_formatter_settings_form($field, $instance, $view_m
 function magnific_popup_field_formatter_settings_summary($field, $instance, $view_mode) {
   $display = $instance['display'][$view_mode];
   $settings = $display['settings'];
+
   $gallery_options = _magnific_popup_gallery_options();
-  $summary = t('Gallery Type: @gallery_type', array('@gallery_type' => $gallery_options[$settings['gallery_style']]));
-  return $summary;
+  $image_styles = image_style_options(TRUE, PASS_THROUGH);
+  $thumbnail_image_style = $settings['thumbnail_image_style'];
+  $popup_image_style = $settings['popup_image_style'];
+
+  $summary[] = t('Gallery Type: @gallery_type', array('@gallery_type' => $gallery_options[$settings['gallery_style']]));
+  $summary[] = t('Thumbnail image style: @style', array('@style' => $image_styles[$thumbnail_image_style]));
+  $summary[] = t('Popup image style: @style', array('@style' => $image_styles[$popup_image_style]));
+
+  return implode('<br />', $summary);
 }
 
 /**
@@ -81,13 +109,22 @@ function magnific_popup_field_formatter_prepare_view($entity_type, $entities, $f
   $wrappers = array();
   foreach ($entities as $entity_id => $entity) {
     foreach ($items[$entity_id] as $delta => &$item) {
-      // Fail-safe check to not load items 
+      // Fail-safe check to not load items
       if (empty($item['uri'])) {
         continue;
       }
       // Check if we've already parsed this fid, and build it if not.
-      if (!isset($loaded_items[$item['fid']])) {
-        $loaded_items[$item['fid']] = FALSE;
+      // Caching only by the fid is not enough if the node is panelized for
+      // example. The problem here is that in this case, a first call to
+      // node_page_view() will be made from page_manager_node_view_page() which
+      // will just cache the results with the settings from the core field
+      // display. Then, the ctools_context_handler_render() will again call at
+      // some point the field_view_field(), but it is most probable that the
+      // settings will be different. So, we need to cache the results based on
+      // the settings.
+      $static_cache_key = md5(serialize($displays[$entity_id]));
+      if (!isset($loaded_items[$item['fid']][$static_cache_key])) {
+        $loaded_items[$item['fid']][$static_cache_key] = FALSE;
         $scheme = file_uri_scheme($item['uri']);
         // Attempt to re-use, or load from scratch, a wrapper for this scheme.
         if (empty($wrappers[$scheme])) {
@@ -101,6 +138,7 @@ function magnific_popup_field_formatter_prepare_view($entity_type, $entities, $f
         // Check that the resource was accessible.
         if ($wrappers[$scheme] && $wrappers[$scheme]->url_stat($item['uri'], STREAM_URL_STAT_QUIET) !== FALSE) {
           $wrapper = $wrappers[$scheme];
+          $uri = $wrapper->getUri();
           // Determine the file's info and store it.
           $thumbnail_path = FALSE;
           // MediaYouTubeStreamWrapper implements getLocalThumbnailPath() to
@@ -110,17 +148,30 @@ function magnific_popup_field_formatter_prepare_view($entity_type, $entities, $f
           }
           // Try the standard method to get a thumbnail.
           else {
-            if ($uri = $wrapper->getUri()) {
+            if ($uri) {
               $thumbnail_path = $uri;
             }
           }
           // Adjust $thumbnail_path based on the $scheme.
-          // @todo Make the default thumbnail_style configurable.
-          $thumbnail_style = 'magnific_popup_thumbnail';
+          $thumbnail_style = $displays[$entity_id]['settings']['thumbnail_image_style'];
           if (!empty($thumbnail_schemes[$scheme])) {
             $thumbnail_style = $thumbnail_schemes[$scheme];
           }
-          $thumbnail_path = image_style_url($thumbnail_style, $thumbnail_path);
+
+          if (!empty($thumbnail_style)) {
+            $thumbnail_path = image_style_url($thumbnail_style, $thumbnail_path);
+          }
+
+          // Image style popup support now only for public imges.
+          $popup_style = $displays[$entity_id]['settings']['popup_image_style'];
+          $target_path = '';
+          if ($item['type'] == 'image' && !empty($popup_style) && file_uri_scheme($uri) == 'public') {
+            $target_path = image_style_url($popup_style, $uri);
+          }
+          else {
+            $target_path = $wrapper->getExternalUrl();
+          }
+
           // Get the title if it exists, or fallback to the filename.
           $title = !empty($item['title']) ? $item['title'] : $item['filename'];
           // Get the alt if it exists, or fallback to the title.
@@ -130,13 +181,13 @@ function magnific_popup_field_formatter_prepare_view($entity_type, $entities, $f
             'title' => $title,
             'alt' => $alt,
             'thumbnail_path' => $thumbnail_path,
-            'target_uri' => $wrapper->getExternalUrl(),
+            'target_uri' => $target_path,
           ) + $item;
-          $loaded_items[$item['fid']] = $gallery_item;
+          $loaded_items[$item['fid']][$static_cache_key] = $gallery_item;
         }
       }
       // Replace $item with the parsed version of info for this fid.
-      $item = $loaded_items[$item['fid']];
+      $item = $loaded_items[$item['fid']][$static_cache_key];
       // Check if this item was unloadable and if so remove it from the list.
       if (empty($item)) {
         unset($items[$entity_id][$delta]);
@@ -156,6 +207,7 @@ function magnific_popup_field_formatter_view($entity_type, $entity, $field, $ins
   if (!_magnific_popup_check_status()) {
     return FALSE;
   }
+
   // Add Magnific Popup library to page.
   drupal_add_library('magnific_popup', 'magnific_popup_formatter', FALSE);
   // Add API-derived extension JavaScript to the page; we do this here instead
