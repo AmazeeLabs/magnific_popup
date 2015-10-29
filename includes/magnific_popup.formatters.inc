@@ -18,6 +18,7 @@ function magnific_popup_field_formatter_info() {
       'settings'  => array(
         'gallery_style' => key($gallery_options),
         'thumbnail_image_style' => 'magnific_popup_thumbnail',
+        'thumbnail_first_image_style' => 'magnific_popup_thumbnail',
         'popup_image_style' => '',
       ),
     ),
@@ -62,6 +63,14 @@ function magnific_popup_field_formatter_settings_form($field, $instance, $view_m
     '#description' => t('Choose the image style you want to use when displaying the thumbnail images of this field.'),
     '#options' => $image_styles,
   );
+  $element['thumbnail_first_image_style'] = array(
+    '#title' => t('First thumbnail image style'),
+    '#type' => 'select',
+    '#default_value' => $settings['thumbnail_first_image_style'],
+    '#empty_option' => t('None (original image)'),
+    '#description' => t('Choose the image style you want to use when displaying the thumbnail for the first image of this field.'),
+    '#options' => $image_styles,
+  );
   $element['popup_image_style'] = array(
     '#title' => t('Popup image style'),
     '#type' => 'select',
@@ -83,10 +92,12 @@ function magnific_popup_field_formatter_settings_summary($field, $instance, $vie
   $gallery_options = _magnific_popup_gallery_options();
   $image_styles = image_style_options(TRUE, PASS_THROUGH);
   $thumbnail_image_style = $settings['thumbnail_image_style'];
+  $thumbnail_first_image_style = $settings['thumbnail_first_image_style'];
   $popup_image_style = $settings['popup_image_style'];
 
   $summary[] = t('Gallery Type: @gallery_type', array('@gallery_type' => $gallery_options[$settings['gallery_style']]));
   $summary[] = t('Thumbnail image style: @style', array('@style' => $image_styles[$thumbnail_image_style]));
+  $summary[] = t('First thumbnail image style: @style', array('@style' => $image_styles[$thumbnail_first_image_style]));
   $summary[] = t('Popup image style: @style', array('@style' => $image_styles[$popup_image_style]));
 
   return implode('<br />', $summary);
@@ -153,7 +164,7 @@ function magnific_popup_field_formatter_prepare_view($entity_type, $entities, $f
             }
           }
           // Adjust $thumbnail_path based on the $scheme.
-          $thumbnail_style = $displays[$entity_id]['settings']['thumbnail_image_style'];
+          $thumbnail_style = ($delta == 0) ? $displays[$entity_id]['settings']['thumbnail_first_image_style'] : $displays[$entity_id]['settings']['thumbnail_image_style'];
           if (!empty($thumbnail_schemes[$scheme])) {
             $thumbnail_style = $thumbnail_schemes[$scheme];
           }
